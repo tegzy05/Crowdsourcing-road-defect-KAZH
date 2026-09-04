@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { MapPin, Camera, Send, CheckCircle2, Clock, RotateCcw, Wifi, WifiOff, Route, X, RefreshCw, AlertCircle, Mail, Map as MapIcon, List, TrendingUp } from "lucide-react";
 import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
+import emailjs from "@emailjs/browser";
 
 const ROADS = [
   { name: "Астана - Щучинск", category: 1, since: "2013" },
@@ -57,11 +58,39 @@ const STORAGE_KEY = "road_defect_reports_local_demo";
 const EMAIL_LOG_KEY = "road_defect_email_log_demo";
 const KAZAKHSTAN_CENTER = [48.0196, 66.9237];
 
+const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID || "";
+const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID || "";
+const EMAILJS_PUBLIC_KEY = import.meta.env.VITE_EMAILJS_PUBLIC_KEY || "";
+const EMAIL_CONFIGURED = Boolean(EMAILJS_SERVICE_ID && EMAILJS_TEMPLATE_ID && EMAILJS_PUBLIC_KEY);
+
+if (EMAIL_CONFIGURED) {
+  emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
+}
+
+// Уменьшает фото до небольшого JPEG, чтобы уложиться в лимит вложений
+// бесплатного тарифа EmailJS (50 Кб на запрос).
+function compressImageForEmail(dataUrl, maxSize = 480, quality = 0.55) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-function logSimulatedEmail(entry) {
+function logEmailEvent(entry) {
   try {
     const raw = localStorage.getItem(EMAIL_LOG_KEY);
     const list = raw ? JSON.parse(raw) : [];
@@ -72,7 +101,38 @@ function logSimulatedEmail(entry) {
   }
 }
 
+// Пытается отправить настоящее письмо через EmailJS (если сконфигурирован).
+// Если ключи не заданы, или отправка не удалась — работает демо-режим:
+// событие логируется локально, как будто письмо ушло, без реальной отправки.
+async function sendEmailNotification({ to, subject, road, defectType, status, photoDataUrl }) {
+  const statusLabel = STATUS[status]?.label || status;
 
+  if (!EMAIL_CONFIGURED) {
+    logEmailEvent({ to, subject, road, defectType, status, real: false });
+    return { real: false, ok: true };
+  }
+
+  try {
+    let photoAttachment = null;
+    if (photoDataUrl) {
+      photoAttachment = await compressImageForEmail(photoDataUrl);
+    }
+    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+      to_email: to,
+      subject,
+      road,
+      defect_type: defectType,
+      status_label: statusLabel,
+      photo_attachment: photoAttachment || "",
+    });
+    logEmailEvent({ to, subject, road, defectType, status, real: true });
+    return { real: true, ok: true };
+  } catch (e) {
+    console.error("EmailJS send error", e);
+    logEmailEvent({ to, subject, road, defectType, status, real: false, error: true });
+    return { real: false, ok: false };
+  }
+}
 
 function timeAgo(ts) {
   const diff = Date.now() - ts;
@@ -619,23 +679,22 @@ function Dashboard({ reports, refresh }) {
     return true;
   });
 
-  const notifyByEmail = (report, newStatus, afterPhoto) => {
+  const notifyByEmail = async (report, newStatus, afterPhoto) => {
     if (!report.email) return;
     const subject =
       newStatus === "in_progress"
         ? "Ваша жалоба принята в работу"
         : "Дефект дороги устранён";
-    logSimulatedEmail({
+    const result = await sendEmailNotification({
       to: report.email,
       subject,
       road: report.road,
       defectType: report.defectType,
       status: newStatus,
-      afterPhoto: afterPhoto || null,
-      reportId: report.id,
+      photoDataUrl: afterPhoto || (report.photos && report.photos[0]) || null,
     });
-    setEmailToast({ to: report.email, subject });
-    setTimeout(() => setEmailToast(null), 5000);
+    setEmailToast({ to: report.email, subject, real: result.real, ok: result.ok });
+    setTimeout(() => setEmailToast(null), 6000);
   };
 
   const updateStatus = (id, status, afterPhoto) => {
@@ -671,12 +730,21 @@ function Dashboard({ reports, refresh }) {
       {emailToast && (
         <div
           style={{
-            ...noteBox, background: "#EFF6FF", color: "#1E40AF", marginBottom: 12,
+            ...noteBox,
+            background: emailToast.ok ? (emailToast.real ? "#ECFDF5" : "#EFF6FF") : "#FEF2F2",
+            color: emailToast.ok ? (emailToast.real ? "#065F46" : "#1E40AF") : "#991B1B",
+            marginBottom: 12,
             display: "flex", alignItems: "center", gap: 8,
           }}
         >
           <Mail size={14} style={{ flexShrink: 0 }} />
-          <span>Письмо отправлено на {emailToast.to}: «{emailToast.subject}»</span>
+          <span>
+            {emailToast.ok
+              ? emailToast.real
+                ? <>Письмо реально отправлено на {emailToast.to}: «{emailToast.subject}»</>
+                : <>[Демо-режим, EmailJS не настроен] Письмо было бы отправлено на {emailToast.to}: «{emailToast.subject}»</>
+              : <>Не удалось отправить письмо на {emailToast.to} — проверьте настройки EmailJS</>}
+          </span>
         </div>
       )}
 
