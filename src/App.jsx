@@ -242,19 +242,40 @@ function CitizenForm({ onSubmit }) {
   const [photos, setPhotos] = useState([]);
   const [locStatus, setLocStatus] = useState("idle");
   const [coords, setCoords] = useState(null);
+  const [locError, setLocError] = useState("");
   const [online, setOnline] = useState(true);
   const [queued, setQueued] = useState(false);
   const [sent, setSent] = useState(false);
   const [errors, setErrors] = useState({});
 
   const getLocation = () => {
+    setLocError("");
+    if (!navigator.geolocation) {
+      setLocError("Браузер не поддерживает геолокацию");
+      return;
+    }
     setLocStatus("getting");
-    setTimeout(() => {
-      const lat = (43.0 + Math.random() * 6).toFixed(5);
-      const lng = (55.0 + Math.random() * 30).toFixed(5);
-      setCoords({ lat: Number(lat), lng: Number(lng) });
-      setLocStatus("ok");
-    }, 900);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setCoords({
+          lat: Number(pos.coords.latitude.toFixed(5)),
+          lng: Number(pos.coords.longitude.toFixed(5)),
+          accuracy: Math.round(pos.coords.accuracy),
+        });
+        setLocStatus("ok");
+      },
+      (err) => {
+        setLocStatus("idle");
+        if (err.code === err.PERMISSION_DENIED) {
+          setLocError("Доступ к геолокации запрещён. Разрешите его в настройках браузера и попробуйте снова.");
+        } else if (err.code === err.TIMEOUT) {
+          setLocError("Не удалось определить местоположение за отведённое время. Попробуйте ещё раз, лучше на открытом месте.");
+        } else {
+          setLocError("Не удалось определить местоположение. Проверьте, включена ли геолокация на устройстве.");
+        }
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
   };
 
   const validate = () => {
@@ -358,11 +379,26 @@ function CitizenForm({ onSubmit }) {
           </select>
         </Field>
 
-        <Field label="Геолокация" error={errors.coords}>
+        <Field label="Геолокация" error={errors.coords || locError}>
           {coords ? (
-            <div style={{ ...input, display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
-              <MapPin size={16} color="#16A34A" />
-              {coords.lat}, {coords.lng}
+            <div>
+              <div style={{ ...input, display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
+                <MapPin size={16} color="#16A34A" />
+                {coords.lat}, {coords.lng}
+                {typeof coords.accuracy === "number" && (
+                  <span style={{ marginLeft: "auto", fontSize: 11.5, color: "var(--text-muted)" }}>
+                    ±{coords.accuracy} м
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={getLocation}
+                disabled={locStatus === "getting"}
+                style={{ ...btnSecondary, marginTop: 6, height: 32, fontSize: 12.5 }}
+              >
+                <RefreshCw size={13} style={{ marginRight: 5, verticalAlign: -2 }} />
+                {locStatus === "getting" ? "Уточняем..." : "Уточнить местоположение"}
+              </button>
             </div>
           ) : (
             <button onClick={getLocation} disabled={locStatus === "getting"} style={btnSecondary}>
