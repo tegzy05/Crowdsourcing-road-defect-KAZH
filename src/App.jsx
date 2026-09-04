@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { MapPin, Camera, Send, CheckCircle2, Clock, RotateCcw, Wifi, WifiOff, Route, X, RefreshCw, AlertCircle } from "lucide-react";
+import { MapPin, Camera, Send, CheckCircle2, Clock, RotateCcw, Wifi, WifiOff, Route, X, RefreshCw, AlertCircle, Mail, Map as MapIcon, List, TrendingUp } from "lucide-react";
+import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
 
 const ROADS = [
   { name: "Астана - Щучинск", category: 1, since: "2013" },
@@ -52,9 +54,25 @@ const STATUS = {
 
 const STORAGE_KEY = "road_defect_reports_local_demo";
 
+const EMAIL_LOG_KEY = "road_defect_email_log_demo";
+const KAZAKHSTAN_CENTER = [48.0196, 66.9237];
+
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
+
+function logSimulatedEmail(entry) {
+  try {
+    const raw = localStorage.getItem(EMAIL_LOG_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    list.unshift({ id: uid(), sentAt: Date.now(), ...entry });
+    localStorage.setItem(EMAIL_LOG_KEY, JSON.stringify(list.slice(0, 50)));
+  } catch (e) {
+    console.error("Email log error", e);
+  }
+}
+
+
 
 function timeAgo(ts) {
   const diff = Date.now() - ts;
@@ -477,10 +495,123 @@ function Field({ label, error, hint, children }) {
   );
 }
 
+function RoadDefectMap({ reports, onSelect }) {
+  if (reports.length === 0) {
+    return (
+      <div style={{ ...card, textAlign: "center", padding: "2.5rem 1rem", color: "var(--text-secondary)" }}>
+        Пока нет репортов на карте.
+      </div>
+    );
+  }
+  return (
+    <div style={{ borderRadius: 12, overflow: "hidden", border: "0.5px solid var(--border, #e5e7eb)" }}>
+      <MapContainer
+        center={KAZAKHSTAN_CENTER}
+        zoom={5}
+        style={{ height: 420, width: "100%" }}
+        scrollWheelZoom={true}
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        {reports.map((r) => (
+          <CircleMarker
+            key={r.id}
+            center={[r.lat, r.lng]}
+            radius={9}
+            pathOptions={{
+              color: "#fff",
+              weight: 2,
+              fillColor: STATUS[r.status].color,
+              fillOpacity: 0.9,
+            }}
+            eventHandlers={{ click: () => onSelect(r) }}
+          >
+            <Popup>
+              <div style={{ fontSize: 13, minWidth: 160 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>{r.defectType}</div>
+                <div style={{ color: "#6b7280", marginBottom: 4 }}>{r.road}</div>
+                <div style={{ marginBottom: 6 }}>
+                  <Badge status={r.status} />
+                </div>
+                <button
+                  onClick={() => onSelect(r)}
+                  style={{
+                    border: "none", background: "#111827", color: "#fff", fontSize: 12,
+                    padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                  }}
+                >
+                  Открыть детали
+                </button>
+              </div>
+            </Popup>
+          </CircleMarker>
+        ))}
+      </MapContainer>
+    </div>
+  );
+}
+
+function RoadStatsPanel({ reports }) {
+  const byRoad = {};
+  reports.forEach((r) => {
+    if (!byRoad[r.road]) byRoad[r.road] = { new: 0, in_progress: 0, resolved: 0, total: 0 };
+    byRoad[r.road][r.status]++;
+    byRoad[r.road].total++;
+  });
+  const sorted = Object.entries(byRoad).sort((a, b) => b[1].total - a[1].total);
+
+  if (sorted.length === 0) return null;
+
+  const maxTotal = sorted[0][1].total;
+
+  return (
+    <div style={{ ...card, padding: "1rem 1.1rem", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+        <TrendingUp size={15} color="var(--text-secondary)" />
+        <span style={{ fontSize: 13.5, fontWeight: 500 }}>Дороги по числу дефектов</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {sorted.map(([road, s]) => (
+          <div key={road}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 3 }}>
+              <span style={{ color: "var(--text-primary)" }}>{road}</span>
+              <span style={{ color: "var(--text-muted)" }}>{s.total}</span>
+            </div>
+            <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "var(--border, #e5e7eb)" }}>
+              {["new", "in_progress", "resolved"].map((k) =>
+                s[k] > 0 ? (
+                  <div
+                    key={k}
+                    title={`${STATUS[k].label}: ${s[k]}`}
+                    style={{ width: `${(s[k] / maxTotal) * 100}%`, background: STATUS[k].color }}
+                  />
+                ) : null
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 14, marginTop: 12, fontSize: 11.5, color: "var(--text-muted)" }}>
+        {["new", "in_progress", "resolved"].map((k) => (
+          <span key={k} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS[k].color, display: "inline-block" }} />
+            {STATUS[k].label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ reports, refresh }) {
   const [filter, setFilter] = useState("all");
   const [roadFilter, setRoadFilter] = useState("all");
   const [selected, setSelected] = useState(null);
+  const [view, setView] = useState("list"); // "list" | "map"
+  const [resolvingId, setResolvingId] = useState(null); // id репорта, для которого запрашиваем фото "после"
+  const [emailToast, setEmailToast] = useState(null);
 
   const filtered = reports.filter((r) => {
     if (filter !== "all" && r.status !== filter) return false;
@@ -488,12 +619,35 @@ function Dashboard({ reports, refresh }) {
     return true;
   });
 
-  const updateStatus = (id, status) => {
+  const notifyByEmail = (report, newStatus, afterPhoto) => {
+    if (!report.email) return;
+    const subject =
+      newStatus === "in_progress"
+        ? "Ваша жалоба принята в работу"
+        : "Дефект дороги устранён";
+    logSimulatedEmail({
+      to: report.email,
+      subject,
+      road: report.road,
+      defectType: report.defectType,
+      status: newStatus,
+      afterPhoto: afterPhoto || null,
+      reportId: report.id,
+    });
+    setEmailToast({ to: report.email, subject });
+    setTimeout(() => setEmailToast(null), 5000);
+  };
+
+  const updateStatus = (id, status, afterPhoto) => {
     const list = loadReports();
-    const updated = list.map((r) => (r.id === id ? { ...r, status } : r));
+    const target = list.find((r) => r.id === id);
+    const updated = list.map((r) =>
+      r.id === id ? { ...r, status, ...(afterPhoto ? { afterPhoto } : {}) } : r
+    );
     saveReports(updated);
     refresh();
-    setSelected((s) => (s && s.id === id ? { ...s, status } : s));
+    setSelected((s) => (s && s.id === id ? { ...s, status, ...(afterPhoto ? { afterPhoto } : {}) } : s));
+    if (target) notifyByEmail(target, status, afterPhoto);
   };
 
   const counts = {
@@ -512,6 +666,35 @@ function Dashboard({ reports, refresh }) {
         <p style={{ margin: 0, fontSize: 12.5, color: "var(--text-muted)" }}>
           Сеть: 28 платных участков, 6 290,59 км (13 участков I категории, 15 участков II–III категории)
         </p>
+      </div>
+
+      {emailToast && (
+        <div
+          style={{
+            ...noteBox, background: "#EFF6FF", color: "#1E40AF", marginBottom: 12,
+            display: "flex", alignItems: "center", gap: 8,
+          }}
+        >
+          <Mail size={14} style={{ flexShrink: 0 }} />
+          <span>Письмо отправлено на {emailToast.to}: «{emailToast.subject}»</span>
+        </div>
+      )}
+
+      <RoadStatsPanel reports={reports} />
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <button
+          onClick={() => setView("list")}
+          style={{ ...chip, ...(view === "list" ? chipActive : {}), display: "flex", alignItems: "center", gap: 5 }}
+        >
+          <List size={13} /> Список
+        </button>
+        <button
+          onClick={() => setView("map")}
+          style={{ ...chip, ...(view === "map" ? chipActive : {}), display: "flex", alignItems: "center", gap: 5 }}
+        >
+          <MapIcon size={13} /> Карта
+        </button>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
@@ -542,7 +725,9 @@ function Dashboard({ reports, refresh }) {
         </div>
       )}
 
-      {filtered.length === 0 ? (
+      {view === "map" ? (
+        <RoadDefectMap reports={filtered} onSelect={setSelected} />
+      ) : filtered.length === 0 ? (
         <div style={{ ...card, textAlign: "center", padding: "2.5rem 1rem", color: "var(--text-secondary)" }}>
           Пока нет репортов в этой категории. Отправьте жалобу через форму жителя, чтобы увидеть, как она появится здесь.
         </div>
@@ -604,15 +789,28 @@ function Dashboard({ reports, refresh }) {
                 <Badge status={selected.status} />
               </div>
               {selected.photos && selected.photos.length > 0 && (
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-                  {selected.photos.map((src, i) => (
-                    <img
-                      key={i}
-                      src={src}
-                      alt={`Фото дефекта ${i + 1}`}
-                      style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "0.5px solid var(--border, #e5e7eb)" }}
-                    />
-                  ))}
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Фото при подаче жалобы</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {selected.photos.map((src, i) => (
+                      <img
+                        key={i}
+                        src={src}
+                        alt={`Фото дефекта ${i + 1}`}
+                        style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "0.5px solid var(--border, #e5e7eb)" }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {selected.afterPhoto && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, color: "#16A34A", marginBottom: 4 }}>Фото после устранения</div>
+                  <img
+                    src={selected.afterPhoto}
+                    alt="Фото после устранения"
+                    style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "1.5px solid #16A34A" }}
+                  />
                 </div>
               )}
               <table style={{ width: "100%", fontSize: 13, marginBottom: 14 }}>
@@ -646,13 +844,25 @@ function Dashboard({ reports, refresh }) {
                 </tbody>
               </table>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => updateStatus(selected.id, "in_progress")} style={btnSecondary}>
-                  В работу
-                </button>
-                <button onClick={() => updateStatus(selected.id, "resolved")} style={{ ...btnSecondary, color: "#16A34A" }}>
-                  Устранён
-                </button>
+                {selected.status !== "resolved" && (
+                  <button onClick={() => updateStatus(selected.id, "in_progress")} style={btnSecondary}>
+                    В работу
+                  </button>
+                )}
+                {selected.status !== "resolved" && (
+                  <button
+                    onClick={() => setResolvingId(selected.id)}
+                    style={{ ...btnSecondary, color: "#16A34A" }}
+                  >
+                    Устранён
+                  </button>
+                )}
               </div>
+              {selected.email && (
+                <p style={{ fontSize: 11.5, color: "var(--text-muted)", margin: "8px 0 0", display: "flex", alignItems: "center", gap: 4 }}>
+                  <Mail size={12} /> Автор жалобы получит письмо об изменении статуса на {selected.email}
+                </p>
+              )}
               <button onClick={() => setSelected(null)} style={{ ...btnSecondary, width: "100%", marginTop: 8 }}>
                 Закрыть
               </button>
@@ -660,9 +870,54 @@ function Dashboard({ reports, refresh }) {
           </div>
         </div>
       )}
+
+      {resolvingId && (
+        <ResolvePhotoModal
+          onCancel={() => setResolvingId(null)}
+          onConfirm={(photoSrc) => {
+            updateStatus(resolvingId, "resolved", photoSrc);
+            setResolvingId(null);
+          }}
+        />
+      )}
     </div>
   );
 }
+
+function ResolvePhotoModal({ onCancel, onConfirm }) {
+  const [photos, setPhotos] = useState([]);
+
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16,
+      }}
+      onClick={onCancel}
+    >
+      <div style={{ ...card, width: 360, maxWidth: "100%" }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 500 }}>Подтвердить устранение</h3>
+        <p style={{ fontSize: 12.5, color: "var(--text-secondary)", margin: "0 0 14px" }}>
+          Сделайте фото отремонтированного участка — оно автоматически уйдёт автору жалобы вместе с уведомлением.
+        </p>
+        <CameraCapture photos={photos} onPhotosChange={setPhotos} />
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button onClick={onCancel} style={{ ...btnSecondary, flex: 1 }}>
+            Отмена
+          </button>
+          <button
+            onClick={() => onConfirm(photos[0]?.src)}
+            disabled={photos.length === 0}
+            style={{ ...btnPrimary, marginTop: 0, flex: 1, opacity: photos.length === 0 ? 0.5 : 1 }}
+          >
+            Подтвердить и уведомить
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 export default function App() {
   const [view, setView] = useState("citizen");
